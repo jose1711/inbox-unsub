@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ s.address }} · Odhlásenia{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('index') }}">← späť na zoznam</a></p>
+
+<div class="panel">
+  <dl>
+    <dt>Odosielateľ</dt><dd><span class="addr">{{ s.name or s.address }}</span>{% if s.name %} · {{ s.address }}{% endif %}</dd>
+    <dt>Stav</dt><dd><span class="badge">{{ STATUSES[s.status] }}</span>
+      {% if s.again_count %} <span class="badge warn">{{ s.again_count }}× po odhlásení</span>{% endif %}</dd>
+    <dt>E-maily</dt><dd>{{ s.msg_count }} · prvý {{ s.first_seen|local }} · posledný {{ s.last_seen|local }}</dd>
+    {% if s.unsubscribed_at %}
+    <dt>Odhlásené</dt><dd>{{ s.unsubscribed_at|local }} ({{ s.unsub_method }})</dd>
+    {% endif %}
+    <dt>Odhlásenie</dt>
+    <dd>
+      {% if s.one_click %}podporuje odhlásenie jedným klikom{% endif %}
+      {% if s.unsub_http %}<div><a href="{{ s.unsub_http }}" target="_blank" rel="noopener noreferrer">Otvoriť odhlasovaciu stránku</a></div>{% endif %}
+      {% if s.unsub_mailto %}<div><a href="{{ s.unsub_mailto }}">Odhlásiť e-mailom</a> <span class="sub">({{ s.unsub_mailto[7:].split('?')[0] }})</span></div>{% endif %}
+      {% if not s.unsub_http and not s.unsub_mailto %}<span class="sub">bez odkazu na odhlásenie</span>{% endif %}
+    </dd>
+  </dl>
+</div>
+
+{% if s.status == 'spam' %}
+  <div class="note">Označené ako spam. Pri skutočnom spame na odhlasovacie odkazy neklikaj – len potvrdíš, že adresa je aktívna.</div>
+{% endif %}
+
+<h2>Rozhodnutie</h2>
+<div class="actions">
+  {% for st in ['keep', 'spam', 'new'] if st != s.status %}
+  <form class="inline" method="post" action="{{ url_for('set_status', sender_id=s.id) }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.path }}">
+    <input type="hidden" name="status" value="{{ st }}">
+    <button class="{{ 'danger' if st == 'spam' }}">{{ {'keep': 'Ponechať', 'spam': 'Spam', 'new': 'Vrátiť na rozhodnutie'}[st] }}</button>
+  </form>
+  {% endfor %}
+  {% if s.one_click and s.status != 'spam' %}
+  <form class="inline" method="post" action="{{ url_for('unsubscribe', sender_id=s.id) }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.path }}">
+    <button class="primary">Odhlásiť jedným klikom</button>
+  </form>
+  {% endif %}
+  {% if s.status == 'spam' and junk_enabled %}
+  <form class="inline" method="post" action="{{ url_for('junk', sender_id=s.id) }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.path }}">
+    <button>Presunúť e-maily do spamu</button>
+  </form>
+  {% endif %}
+</div>
+
+<h2>Zapísať ručné odhlásenie</h2>
+<form method="post" action="{{ url_for('manual_unsubscribed', sender_id=s.id) }}" class="search">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.path }}">
+  <input type="text" name="method" placeholder="Ako? (napr. odkaz na webe, GDPR žiadosť e-mailom, v nastaveniach účtu)">
+  <button class="primary">Odhlásil som sa</button>
+</form>
+
+<h2>Poznámka</h2>
+<form method="post" action="{{ url_for('note', sender_id=s.id) }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <textarea name="note" rows="3" style="width:100%">{{ s.note or '' }}</textarea>
+  <p><button>Uložiť poznámku</button></p>
+</form>
+
+<h2>E-maily</h2>
+<div class="panel">
+<table>
+  <thead><tr><th>Odoslané</th><th>Predmet</th><th>Priečinok</th></tr></thead>
+  <tbody>
+  {% for m in messages %}
+    <tr class="{{ 'again' if s.unsubscribed_at and m.sent_at > s.unsubscribed_at }}">
+      <td style="white-space:nowrap">{{ m.sent_at|local }}</td><td>{{ m.subject }}</td><td class="sub">{{ m.folder }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>História</h2>
+<div class="panel">
+<table>
+  <tbody>
+  {% for e in events %}
+    <tr><td style="white-space:nowrap">{{ e.at|local }}</td><td>{{ e.action }}</td><td class="sub">{{ e.detail }}</td></tr>
+  {% else %}
+    <tr><td class="empty">Žiadne záznamy.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

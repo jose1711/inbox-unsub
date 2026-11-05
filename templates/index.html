@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="tabs">
+  {% for key, (label, _) in views.items() %}
+    <a href="{{ url_for('index', view=key) }}"
+       class="{{ 'active' if key == view }} {{ 'alert' if key == 'again' and counts[key] > 0 and key != view }}">
+      {{ label }}<span class="count">{{ counts[key] }}</span>
+    </a>
+  {% endfor %}
+</nav>
+
+<form class="search" method="get">
+  <input type="hidden" name="view" value="{{ view }}">
+  <input type="text" name="q" value="{{ q }}" placeholder="Hľadať odosielateľa alebo doménu">
+  <button type="submit">Hľadať</button>
+</form>
+
+{% if view == 'again' and rows %}
+  <div class="note">Títo odosielatelia ti písali viac ako {{ grace_days }} dni po odhlásení. Na detaile nájdeš
+    dátum odhlásenia aj zoznam e-mailov, ktoré prišli potom – hodí sa to ako podklad pre GDPR námietku.</div>
+{% endif %}
+
+<div class="panel">
+{% if rows %}
+<table class="senders">
+  <thead><tr><th>Odosielateľ</th><th>E-maily</th><th>Stav</th><th>Akcie</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="{{ 'again' if r.again_count }}">
+      <td>
+        <a class="addr" href="{{ url_for('sender_detail', sender_id=r.id) }}">{{ r.name or r.address }}</a>
+        {% if r.name %}<div class="sub">{{ r.address }}</div>{% endif %}
+        <div class="sub">{{ r.last_subject }}</div>
+      </td>
+      <td>
+        {{ r.msg_count }}
+        <div class="sub">posledný {{ r.last_seen|local }}</div>
+      </td>
+      <td>
+        <span class="badge">{{ STATUSES[r.status] }}</span>
+        {% if r.unsubscribed_at %}<div class="sub">od {{ r.unsubscribed_at|local }}</div>{% endif %}
+        {% if r.again_count %}<div><span class="badge warn">{{ r.again_count }}× po odhlásení</span></div>{% endif %}
+      </td>
+      <td>
+        <div class="actions">
+          {% if r.status != 'keep' %}
+          <form class="inline" method="post" action="{{ url_for('set_status', sender_id=r.id) }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.full_path }}">
+            <input type="hidden" name="status" value="keep"><button>Ponechať</button>
+          </form>
+          {% endif %}
+          {% if r.status != 'spam' %}
+          <form class="inline" method="post" action="{{ url_for('set_status', sender_id=r.id) }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.full_path }}">
+            <input type="hidden" name="status" value="spam"><button class="danger">Spam</button>
+          </form>
+          {% endif %}
+          {% if r.status in ('new', 'keep') %}
+            {% if r.one_click %}
+            <form class="inline" method="post" action="{{ url_for('unsubscribe', sender_id=r.id) }}">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.full_path }}">
+              <button class="primary">Odhlásiť</button>
+            </form>
+            {% else %}
+            <a class="btn primary" href="{{ url_for('sender_detail', sender_id=r.id) }}">Odhlásiť…</a>
+            {% endif %}
+          {% endif %}
+          {% if r.status == 'spam' and junk_enabled %}
+          <form class="inline" method="post" action="{{ url_for('junk', sender_id=r.id) }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.full_path }}">
+            <button>Presunúť do spamu</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <div class="empty">
+    {% if view == 'decide' %}Nič na rozhodnutie.{% elif view == 'again' %}Nikto ti po odhlásení nepíše.{% else %}Zatiaľ prázdne.{% endif %}
+  </div>
+{% endif %}
+</div>
+{% endblock %}

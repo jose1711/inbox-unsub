@@ -1,0 +1,13 @@
+services:
+  inbox-unsub:
+    # Prebuilt image from GitHub Container Registry (amd64 + arm64).
+    image: ghcr.io/jose1711/inbox-unsub:latest
+    # Uncomment to build from source instead (docker compose up -d --build):
+    # build: .
+    container_name: inbox-unsub
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
