@@ -130,6 +130,7 @@ cp data/inbox.db inbox-$(date +%F).db           # backup (SQLite file, safe to c
 ```bash
 docker compose run --rm inbox-unsub python app.py --list-folders   # exact IMAP folder names
 docker compose run --rm inbox-unsub python app.py --scan           # one scan, then exit
+docker exec inbox-unsub python app.py --explain shop.com           # why mail from a sender is / isn't shown
 docker exec inbox-unsub python app.py --rescan                     # re-check the last INITIAL_DAYS days (e.g. after an update)
 ```
 

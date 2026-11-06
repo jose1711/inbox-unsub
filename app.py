@@ -780,6 +780,70 @@ def healthz():
     return {"ok": True}
 
 
+def explain(query):
+    """Diagnostika: kde sú e-maily od odosielateľa a prečo (ne)boli zapísané."""
+    init_db()
+    conn = db_connect()
+    print("== Stav skenera ==")
+    print("  priečinky:", ", ".join(CFG["IMAP_FOLDERS"]), "| MIN_SCORE:", CFG["MIN_SCORE"])
+    print("  posledné úspešné skenovanie (UTC):", get_meta(conn, "last_scan_ok") or "žiadne")
+    print("  posledná chyba:", get_meta(conn, "last_scan_error") or "žiadna")
+    last_ok = get_meta(conn, "last_scan_ok")
+    if last_ok:
+        print("  ďalšie skenovanie pozrie e-maily od:",
+              (datetime.strptime(last_ok, TS_FMT) - timedelta(days=2)).strftime("%Y-%m-%d"))
+
+    print(f"\n== V databáze (hľadám '{query}') ==")
+    rows = conn.execute(
+        "SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.sender_id=s.id) AS n FROM senders s "
+        "WHERE s.address LIKE ? OR s.name LIKE ?", (f"%{query}%", f"%{query}%")).fetchall()
+    for r in rows:
+        print(f"  {r['address']}: stav '{STATUSES.get(r['status'], r['status'])}', e-mailov {r['n']}, "
+              f"posledný {r['last_seen']} (na stránke v záložke „{STATUSES.get(r['status'])}“ alebo „Všetko“)")
+    if not rows:
+        print("  nič")
+
+    print("\n== V schránke ==")
+    imap = imap_connect()
+    try:
+        folders = list(CFG["IMAP_FOLDERS"])
+        typ, data = imap.list()
+        for line in data or []:
+            line = line.decode(errors="replace")
+            if "\\All" in line:  # Gmail „Všetky správy“ – nájde aj archivované
+                name = line.rsplit(' "/" ', 1)[-1].strip().strip('"')
+                if name not in folders:
+                    folders.append(name)
+        for folder in folders:
+            typ, _ = imap.select(imap_quote(folder), readonly=True)
+            if typ != "OK":
+                print(f"  [{folder}] nedá sa otvoriť")
+                continue
+            typ, data = imap.uid("SEARCH", None, "FROM", imap_quote(query))
+            uids = data[0].split() if typ == "OK" and data and data[0] else []
+            scanned = folder in CFG["IMAP_FOLDERS"]
+            print(f"  [{folder}] {len(uids)} e-mailov" + ("" if scanned else "  (tento priečinok sa NESKENUJE)"))
+            for uid in uids[-5:]:
+                typ, resp = imap.uid("FETCH", uid, f"(BODY.PEEK[HEADER.FIELDS ({HEADER_FIELDS})])")
+                part = next((p for p in resp if isinstance(p, tuple)), None)
+                if not part:
+                    continue
+                info = analyze(part[1])
+                if not info:
+                    continue
+                stored = conn.execute("SELECT 1 FROM messages WHERE msg_key=?", (info["key"],)).fetchone()
+                verdict = ("ZAPÍSANÝ" if stored else
+                           "nezapísaný – nízke skóre" if info["score"] < CFG["MIN_SCORE"] else
+                           "nezapísaný – priečinok sa neskenuje (pozri IMAP_FOLDERS)" if not scanned else
+                           "nezapísaný – je starší ako skenované obdobie, alebo sken ešte neprebehol "
+                           "(pomôže --rescan)")
+                print(f"    {info['sent'] and ts(info['sent'])}  {info['subject'][:60]}")
+                print(f"      skóre {info['score']} (bez signálov zo servera): {', '.join(info['reasons']) or '-'}")
+                print(f"      → {verdict}")
+    finally:
+        imap.logout()
+
+
 def list_folders():
     imap = imap_connect()
     try:
@@ -792,6 +856,12 @@ def list_folders():
 
 if __name__ == "__main__":
     import sys
+    if "--explain" in sys.argv:
+        idx = sys.argv.index("--explain")
+        if idx + 1 >= len(sys.argv):
+            sys.exit("Použitie: python app.py --explain <adresa alebo doména>")
+        explain(sys.argv[idx + 1])
+        sys.exit(0)
     if "--list-folders" in sys.argv:
         list_folders()
         sys.exit(0)

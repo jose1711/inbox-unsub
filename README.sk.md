@@ -87,6 +87,7 @@ cp data/inbox.db inbox-$(date +%F).db           # záloha
 ```bash
 docker compose run --rm inbox-unsub python app.py --list-folders   # presné názvy priečinkov
 docker compose run --rm inbox-unsub python app.py --scan           # jedno skenovanie a koniec
+docker exec inbox-unsub python app.py --explain shop.sk            # prečo sa e-mail od odosielateľa (ne)zobrazuje
 docker exec inbox-unsub python app.py --rescan                     # znova prejde posledných INITIAL_DAYS dní
 ```
 
