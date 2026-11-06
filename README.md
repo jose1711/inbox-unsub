@@ -130,6 +130,7 @@ cp data/inbox.db inbox-$(date +%F).db           # backup (SQLite file, safe to c
 ```bash
 docker compose run --rm inbox-unsub python app.py --list-folders   # exact IMAP folder names
 docker compose run --rm inbox-unsub python app.py --scan           # one scan, then exit
+docker exec inbox-unsub python app.py --rescan                     # re-check the last INITIAL_DAYS days (e.g. after an update)
 ```
 
 ## Configuration
@@ -146,6 +147,7 @@ All settings are environment variables (see [`.env.example`](.env.example)):
 | `INITIAL_DAYS` | `30` | how far back the first scan looks |
 | `GRACE_DAYS` | `3` | tolerance after unsubscribing before a sender counts as "writing again" |
 | `MIN_SCORE` | `3` | detection threshold for unknown senders (see below) |
+| `BODY_KEYWORDS` | `unsubscribe,abmelden,opt-out` | words searched in message bodies on the IMAP server; empty disables it |
 | `TZ` | `Europe/Berlin` | time zone used to display dates |
 | `WEB_USER` / `WEB_PASSWORD` | `admin` / – | basic-auth credentials for the web UI |
 | `DB_PATH` | `data/inbox.db` | SQLite database path |
@@ -161,6 +163,12 @@ Each message gets a score from its headers:
 | `Precedence: bulk` / `list` / `junk` | 2 |
 | `List-Id` header present | 1 |
 | sender local part like `newsletter@`, `noreply@`, `marketing@`, `promo@`, `offers@` … | 1 |
+| header added by a bulk-mail platform (`Feedback-ID`, `X-CSA-Complaints`, `X-Campaign…`, Mailgun, SendGrid, SES, Mailchimp, Listrak …) | 2 |
+| bounce / VERP `Return-Path` or `Errors-To` (e.g. `…@bounce.shop.com`) | 1 |
+| body contains a word from `BODY_KEYWORDS` (searched **on the server**, body is not downloaded) | 2 |
+| Gmail only: message is in the *Promotions* category | 3 |
+
+Some senders don't send any list headers at all, which is why the last four signals exist.
 
 An **unknown** sender is recorded once a message reaches `MIN_SCORE` (default 3, i.e. anything with an unsubscribe link). Once a sender is in the database, **every** further message from that address is recorded — even if, after you unsubscribed, they stop sending list headers.
 

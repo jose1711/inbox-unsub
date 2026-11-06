@@ -51,6 +51,9 @@ CFG = {
     "INITIAL_DAYS": _env_int("INITIAL_DAYS", 30),
     "GRACE_DAYS": _env_int("GRACE_DAYS", 3),
     "MIN_SCORE": _env_int("MIN_SCORE", 3),
+    # Slová hľadané v tele e-mailu (na strane servera, obsah sa nesťahuje); prázdne = vypnuté
+    "BODY_KEYWORDS": [w.strip() for w in os.environ.get(
+        "BODY_KEYWORDS", "unsubscribe,abmelden,opt-out").split(",") if w.strip()],
     "DB_PATH": os.environ.get("DB_PATH", "data/inbox.db"),
     "WEB_USER": os.environ.get("WEB_USER", "admin"),
     "WEB_PASSWORD": os.environ.get("WEB_PASSWORD", ""),
@@ -72,7 +75,11 @@ STATUSES = {
 TS_FMT = "%Y-%m-%d %H:%M:%S"  # všetky časy v DB sú v UTC v tomto tvare
 IMAP_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-HEADER_FIELDS = ("FROM SUBJECT DATE MESSAGE-ID LIST-UNSUBSCRIBE "
+# Hlavičky, ktoré pridávajú platformy na hromadné rozosielanie (ESP)
+ESP_HEADERS = ("FEEDBACK-ID X-CSA-COMPLAINTS X-CAMPAIGN X-CAMPAIGN-ID X-CAMPAIGNID X-RPCAMPAIGN "
+               "X-MAILGUN-TAG X-MAILGUN-SID X-SG-EID X-SES-OUTGOING X-MC-USER X-MAILCHIMP-ID "
+               "X-LISTMEMBER X-MSYS-API X-SFMC-STACK X-MARKETO-ID X-MAILER-REFERENCE X-MESSAGE-REFERENCE")
+HEADER_FIELDS = ("FROM SUBJECT DATE MESSAGE-ID RETURN-PATH ERRORS-TO " + ESP_HEADERS + " LIST-UNSUBSCRIBE "
                  "LIST-UNSUBSCRIBE-POST LIST-ID PRECEDENCE")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -180,8 +187,20 @@ def decode(value):
         return str(value).strip()
 
 
-def analyze(raw_headers: bytes):
-    """Z hlavičiek jedného e-mailu vráti slovník s údajmi a skóre „hromadnosti“."""
+def _is_bounce_address(value):
+    """Return-Path / Errors-To typu bounce.firma.com alebo dlhá VERP adresa."""
+    _, a = parseaddr(str(value or ""))
+    a = a.lower()
+    if "@" not in a:
+        return False
+    local, domain = a.split("@", 1)
+    return ("bounce" in a or domain.startswith(("bnc.", "bounces.", "mail-bounce"))
+            or (len(local) >= 24 and sum(c.isdigit() for c in local) >= 3))
+
+
+def analyze(raw_headers: bytes, extra=None):
+    """Z hlavičiek jedného e-mailu vráti slovník s údajmi a skóre „hromadnosti“.
+    `extra` je zoznam (body, dôvod) zistených mimo hlavičiek (napr. hľadaním na serveri)."""
     # Niektorí odosielatelia dávajú do hlavičiek surové UTF-8 namiesto =?utf-8?...?=
     try:
         m = message_from_string(raw_headers.decode("utf-8"))
@@ -214,6 +233,16 @@ def analyze(raw_headers: bytes):
     if BULK_LOCALPART.search(addr.split("@")[0]):
         score += 1
         reasons.append("adresa odosielateľa")
+    esp = [h for h in ESP_HEADERS.split() if m.get(h)]
+    if esp:
+        score += 2
+        reasons.append("hlavička rozosielacej platformy (" + esp[0].title() + ")")
+    if _is_bounce_address(m.get("Return-Path")) or _is_bounce_address(m.get("Errors-To")):
+        score += 1
+        reasons.append("bounce adresa")
+    for pts, why in extra or ():
+        score += pts
+        reasons.append(why)
 
     sent = None
     try:
@@ -302,6 +331,36 @@ def imap_connect():
     return imap
 
 
+def _search_uids(imap, *criteria):
+    try:
+        typ, data = imap.uid("SEARCH", None, *criteria)
+        if typ == "OK" and data and data[0]:
+            return set(data[0].split())
+    except Exception as e:
+        log.debug("Vyhľadávanie %s zlyhalo: %s", criteria, e)
+    return set()
+
+
+def server_side_signals(imap, since_str):
+    """Signály, ktoré zistí server bez sťahovania obsahu e-mailov:
+    slová ako „unsubscribe“ v tele a (pri Gmaile) kategória Promo akcie."""
+    extras = {}
+
+    def add(uids, pts, why):
+        for u in uids:
+            extras.setdefault(u, []).append((pts, why))
+
+    if CFG["BODY_KEYWORDS"]:
+        found = set()
+        for word in CFG["BODY_KEYWORDS"]:
+            found |= _search_uids(imap, "SINCE", since_str, "BODY", imap_quote(word))
+        add(found, 2, "odkaz na odhlásenie v texte")
+    if "X-GM-EXT-1" in imap.capabilities:
+        add(_search_uids(imap, "SINCE", since_str, "X-GM-RAW", imap_quote("category:promotions")),
+            3, "Gmail: Promo akcie")
+    return extras
+
+
 _scan_lock = threading.Lock()
 
 
@@ -331,6 +390,7 @@ def scan():
                     continue
                 typ, data = imap.uid("SEARCH", None, "SINCE", since_str)
                 uids = data[0].split() if typ == "OK" and data and data[0] else []
+                extras = server_side_signals(imap, since_str) if uids else {}
                 for i in range(0, len(uids), 200):
                     chunk = b",".join(uids[i:i + 200])
                     typ, resp = imap.uid("FETCH", chunk, f"(BODY.PEEK[HEADER.FIELDS ({HEADER_FIELDS})])")
@@ -339,7 +399,8 @@ def scan():
                     for part in resp:
                         if isinstance(part, tuple) and len(part) > 1:
                             checked += 1
-                            info = analyze(part[1])
+                            mu = re.search(rb"UID (\d+)", part[0])
+                            info = analyze(part[1], extras.get(mu.group(1)) if mu else None)
                             if info and store(conn, info, folder):
                                 added += 1
                     conn.commit()
@@ -687,8 +748,14 @@ if __name__ == "__main__":
     if "--list-folders" in sys.argv:
         list_folders()
         sys.exit(0)
-    if "--scan" in sys.argv:
+    if "--scan" in sys.argv or "--rescan" in sys.argv:
         init_db()
+        if "--rescan" in sys.argv:
+            # znova prejde posledných INITIAL_DAYS dní; už uložené e-maily sa nezdvoja
+            c = db_connect()
+            c.execute("DELETE FROM meta WHERE key='last_scan_ok'")
+            c.commit()
+            c.close()
         print(scan())
         sys.exit(0)
     init_db()

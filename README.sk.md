@@ -87,6 +87,7 @@ cp data/inbox.db inbox-$(date +%F).db           # záloha
 ```bash
 docker compose run --rm inbox-unsub python app.py --list-folders   # presné názvy priečinkov
 docker compose run --rm inbox-unsub python app.py --scan           # jedno skenovanie a koniec
+docker exec inbox-unsub python app.py --rescan                     # znova prejde posledných INITIAL_DAYS dní
 ```
 
 ## Nastavenia
@@ -101,6 +102,10 @@ Všetky nastavenia sú premenné prostredia v `.env`. Ich zoznam s popisom je v 
 | `Precedence: bulk/list/junk` | 2 |
 | hlavička `List-Id` | 1 |
 | adresa typu newsletter@, noreply@, marketing@, promo@… | 1 |
+| hlavička rozosielacej platformy (`Feedback-ID`, `X-CSA-Complaints`, `X-Campaign…`, Mailgun, SendGrid, SES, Mailchimp, Listrak…) | 2 |
+| bounce/VERP adresa v `Return-Path` alebo `Errors-To` | 1 |
+| v tele je slovo z `BODY_KEYWORDS` (hľadá **server**, obsah sa nesťahuje) | 2 |
+| len Gmail: e-mail je v kategórii *Promo akcie* | 3 |
 
 Neznámy odosielateľ sa zapíše od skóre `MIN_SCORE` (predvolene 3). Odosielateľ, ktorý už v databáze je, sa sleduje vždy, aj keby po odhlásení prestal posielať tieto hlavičky. Sleduje sa presná adresa a vyhľadávanie podľa domény zoskupí viac adries jednej firmy.
 
