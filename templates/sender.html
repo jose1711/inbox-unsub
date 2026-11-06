@@ -22,8 +22,12 @@
   </dl>
 </div>
 
+{% if s.again_count and 'again' in auto_junk %}
+  <div class="note">Píše po odhlásení – jeho ďalšie e-maily sa pri skenovaní automaticky presunú do spamu.</div>
+{% endif %}
 {% if s.status == 'spam' %}
-  <div class="note">Označené ako spam. Pri skutočnom spame na odhlasovacie odkazy neklikaj – len potvrdíš, že adresa je aktívna.</div>
+  <div class="note">Označené ako spam. Pri skutočnom spame na odhlasovacie odkazy neklikaj – len potvrdíš, že adresa je aktívna.
+    {% if 'spam' in auto_junk %}Nové e-maily od tohto odosielateľa sa pri skenovaní automaticky presunú do spamu.{% endif %}</div>
 {% endif %}
 
 <h2>Rozhodnutie</h2>

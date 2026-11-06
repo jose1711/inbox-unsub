@@ -30,7 +30,7 @@ Existujúce nástroje to úplne nepokrývajú: Gmail „Spravovať odbery“ si 
 - **Odhlásenie jedným klikom** (RFC 8058), ak ho odosielateľ podporuje. Inak stránka ukáže odkaz alebo `mailto:` adresu a ty potvrdíš „Odhlásil som sa“ aj so spôsobom.
 - **Záložka „Znova píšu“:** odosielatelia, ktorí písali viac ako `GRACE_DAYS` dní po odhlásení, so zoznamom týchto e-mailov a históriou.
 - **Export CSV** s dátumami odhlásení a počtom e-mailov po nich, teda podklad pre GDPR námietku alebo sťažnosť.
-- **Voliteľný presun do spamu** pre odosielateľov označených ako spam (IMAP `MOVE`, nič sa nemaže).
+- **Voliteľný presun do spamu** pre odosielateľov označených ako spam (IMAP `MOVE`, nič sa nemaže), tlačidlom alebo **automaticky** pri každom skenovaní cez `AUTO_JUNK` (`spam` = označení ako spam, `again` = píšu po odhlásení).
 - Nenáročná: Python + Flask + SQLite, image pre amd64 aj arm64 (beží aj na Raspberry Pi).
 
 ## Nasadenie

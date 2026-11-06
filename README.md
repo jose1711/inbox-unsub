@@ -41,7 +41,7 @@ Existing tools don't quite cover this:
 - **One-click unsubscribe** ([RFC 8058](https://www.rfc-editor.org/rfc/rfc8058)) when the sender supports it; otherwise the page shows the unsubscribe link / `mailto:` address and lets you confirm with *"I unsubscribed"*, noting how (link, GDPR request, account settings, …).
 - **"Writing again" tab** — senders who mailed you more than `GRACE_DAYS` after you unsubscribed, with the list of offending messages and a full history per sender.
 - **CSV export** with dates of unsubscription and number of mails received afterwards — ready-made evidence for a GDPR objection or a complaint to a data-protection authority.
-- **Optional "move to spam"** for senders you marked as spam (uses IMAP `MOVE`, nothing is deleted).
+- **Optional "move to spam"** for senders you marked as spam (uses IMAP `MOVE`, nothing is deleted) — on demand, or **automatically** on every scan with `AUTO_JUNK` (for senders marked as spam and/or senders writing after you unsubscribed).
 - Small footprint: Python + Flask + SQLite, multi-arch image (amd64 / arm64 — runs on a Raspberry Pi).
 
 ## Deployment
@@ -143,6 +143,7 @@ All settings are environment variables (see [`.env.example`](.env.example)):
 | `IMAP_USER` / `IMAP_PASSWORD` | – | login (app password for Gmail) |
 | `IMAP_FOLDERS` | `INBOX` | comma-separated folders to scan |
 | `JUNK_FOLDER` | *(empty)* | target folder for *move to spam*; empty disables it. Gmail: usually `[Gmail]/Spam`. Folder names with non-ASCII characters must be given in IMAP's encoded form, exactly as `--list-folders` prints them. |
+| `AUTO_JUNK` | *(empty)* | automatically move new mail to `JUNK_FOLDER` on each scan: `spam` = senders marked as spam, `again` = senders writing after you unsubscribed; e.g. `spam,again`. Requires `JUNK_FOLDER`. |
 | `SCAN_INTERVAL_MIN` | `60` | scan interval in minutes (min. 5) |
 | `INITIAL_DAYS` | `30` | how far back the first scan looks |
 | `GRACE_DAYS` | `3` | tolerance after unsubscribing before a sender counts as "writing again" |
@@ -179,7 +180,7 @@ Senders are tracked by exact address. A company that mails from several addresse
 ## Privacy and security
 
 - Your mailbox data never leaves your machine. The only outgoing requests besides IMAP are the one-click unsubscribe POSTs you trigger yourself.
-- Only headers are read; the scanner opens folders read-only. The single action that changes your mailbox is the optional *move to spam* button.
+- Only headers are read; the scanner opens folders read-only. The only thing that changes your mailbox is *move to spam* (the button, or `AUTO_JUNK` if you enable it) — mail is moved, never deleted.
 - Always set `WEB_PASSWORD` — whoever can open the page can unsubscribe and move mail on your behalf. Forms are CSRF-protected.
 - The IMAP password is an app password you can revoke independently of your main password.
 

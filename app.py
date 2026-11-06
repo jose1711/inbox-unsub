@@ -47,6 +47,9 @@ CFG = {
     "IMAP_PASSWORD": os.environ.get("IMAP_PASSWORD", ""),
     "IMAP_FOLDERS": [f.strip() for f in os.environ.get("IMAP_FOLDERS", "INBOX").split(",") if f.strip()],
     "JUNK_FOLDER": os.environ.get("JUNK_FOLDER", "").strip(),
+    # Automatický presun do JUNK_FOLDER: "spam" = odosielatelia označení ako spam,
+    # "again" = odosielatelia, ktorí píšu po odhlásení. Prázdne = vypnuté.
+    "AUTO_JUNK": {w.strip().lower() for w in os.environ.get("AUTO_JUNK", "").split(",") if w.strip()},
     "SCAN_INTERVAL_MIN": max(5, _env_int("SCAN_INTERVAL_MIN", 60)),
     "INITIAL_DAYS": _env_int("INITIAL_DAYS", 30),
     "GRACE_DAYS": _env_int("GRACE_DAYS", 3),
@@ -381,9 +384,10 @@ def scan():
         since_str = f"{since.day:02d}-{IMAP_MONTHS[since.month - 1]}-{since.year}"
 
         imap = imap_connect()
-        added = checked = 0
+        added = checked = moved = 0
         try:
             for folder in CFG["IMAP_FOLDERS"]:
+                to_move = {}  # uid -> (sender_id, dôvod)
                 typ, _ = imap.select(imap_quote(folder), readonly=True)
                 if typ != "OK":
                     log.warning("Priečinok %s sa nedá otvoriť", folder)
@@ -403,6 +407,22 @@ def scan():
                             info = analyze(part[1], extras.get(mu.group(1)) if mu else None)
                             if info and store(conn, info, folder):
                                 added += 1
+                            if info and mu:
+                                why = auto_junk_reason(conn, info, folder)
+                                if why:
+                                    to_move[mu.group(1)] = why
+                    conn.commit()
+                if to_move:
+                    try:
+                        moved += move_uids(imap, folder, list(to_move))
+                        per_sender = {}
+                        for sid, why in to_move.values():
+                            per_sender.setdefault((sid, why), 0)
+                            per_sender[(sid, why)] += 1
+                        for (sid, why), n in per_sender.items():
+                            log_event(conn, sid, "automaticky presunuté do spamu", f"{n} e-mailov ({why})")
+                    except Exception as e:
+                        log.warning("Automatický presun do spamu zlyhal: %s", e)
                     conn.commit()
         finally:
             try:
@@ -411,6 +431,8 @@ def scan():
                 pass
 
         msg = f"Skontrolovaných {checked} e-mailov, nových záznamov {added}."
+        if moved:
+            msg += f" Presunutých do spamu {moved}."
         set_meta(conn, "last_scan_ok", ts(started))
         set_meta(conn, "last_scan_msg", msg)
         set_meta(conn, "last_scan_error", "")
@@ -427,6 +449,36 @@ def scan():
         _scan_lock.release()
 
 
+def auto_junk_reason(conn, info, folder):
+    """Ak sa má e-mail automaticky presunúť do spamu, vráti (sender_id, dôvod)."""
+    if not CFG["AUTO_JUNK"] or not CFG["JUNK_FOLDER"] or folder == CFG["JUNK_FOLDER"]:
+        return None
+    s = conn.execute("SELECT id, status, unsubscribed_at FROM senders WHERE address=?",
+                     (info["address"],)).fetchone()
+    if s is None:
+        return None
+    if "spam" in CFG["AUTO_JUNK"] and s["status"] == "spam":
+        return s["id"], "označený ako spam"
+    if ("again" in CFG["AUTO_JUNK"] and s["status"] == "unsubscribed" and s["unsubscribed_at"]
+            and info["sent"]):
+        limit = datetime.strptime(s["unsubscribed_at"], TS_FMT) + timedelta(days=CFG["GRACE_DAYS"])
+        if ts(info["sent"]) > limit.strftime(TS_FMT):
+            return s["id"], "píše po odhlásení"
+    return None
+
+
+def move_uids(imap, folder, uids):
+    """Presunie dané UID z priečinka do JUNK_FOLDER. Vráti počet presunutých."""
+    if "MOVE" not in imap.capabilities:
+        raise RuntimeError("Server nepodporuje príkaz IMAP MOVE.")
+    typ, _ = imap.select(imap_quote(folder))  # zápis vyžaduje otvorenie bez readonly
+    if typ != "OK":
+        return 0
+    uids = [u if isinstance(u, bytes) else str(u).encode() for u in uids]
+    typ, _ = imap.uid("MOVE", b",".join(uids), imap_quote(CFG["JUNK_FOLDER"]))
+    return len(uids) if typ == "OK" else 0
+
+
 def move_to_junk(address):
     """Presunie všetky e-maily od odosielateľa do JUNK_FOLDER (vratná akcia)."""
     if not CFG["JUNK_FOLDER"]:
@@ -434,22 +486,16 @@ def move_to_junk(address):
     imap = imap_connect()
     moved = 0
     try:
-        caps = imap.capabilities
         for folder in CFG["IMAP_FOLDERS"]:
             if folder == CFG["JUNK_FOLDER"]:
                 continue
-            typ, _ = imap.select(imap_quote(folder))
+            typ, _ = imap.select(imap_quote(folder), readonly=True)
             if typ != "OK":
                 continue
             typ, data = imap.uid("SEARCH", None, "FROM", imap_quote(address))
             uids = data[0].split() if typ == "OK" and data and data[0] else []
-            if not uids:
-                continue
-            if "MOVE" not in caps:
-                raise RuntimeError("Server nepodporuje príkaz IMAP MOVE.")
-            typ, _ = imap.uid("MOVE", b",".join(uids), imap_quote(CFG["JUNK_FOLDER"]))
-            if typ == "OK":
-                moved += len(uids)
+            if uids:
+                moved += move_uids(imap, folder, uids)
     finally:
         try:
             imap.logout()
@@ -541,6 +587,7 @@ def _ctx():
         "last_scan_error": get_meta(conn, "last_scan_error"),
         "scan_running": bool(get_meta(conn, "scan_running")),
         "junk_enabled": bool(CFG["JUNK_FOLDER"]),
+        "auto_junk": CFG["AUTO_JUNK"] if CFG["JUNK_FOLDER"] else set(),
         "grace_days": CFG["GRACE_DAYS"],
     }
 
